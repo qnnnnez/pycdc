@@ -1624,7 +1624,8 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                     break;
                 }
 
-                if (curblock->blktype() == ASTBlock::BLK_WITH) {
+                if (curblock->blktype() == ASTBlock::BLK_WITH
+                    || curblock->blktype() == ASTBlock::BLK_ASYNC_WITH) {
                     // This should only be popped by a WITH_CLEANUP
                     break;
                 }
@@ -1721,7 +1722,8 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                 PycRef<ASTNode> value = stack.top();
                 stack.pop();
                 if (!curblock->inited()) {
-                    if (curblock->blktype() == ASTBlock::BLK_WITH) {
+                    if (curblock->blktype() == ASTBlock::BLK_WITH
+                        || curblock->blktype() == ASTBlock::BLK_ASYNC_WITH) {
                         curblock.cast<ASTWithBlock>()->setExpr(value);
                     } else {
                         curblock->init();
@@ -1914,9 +1916,27 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
             break;
         case Pyc::SETUP_WITH_A:
             {
-                PycRef<ASTBlock> withblock = new ASTWithBlock(pos+operand);
+                PycRef<ASTBlock> withblock = new ASTWithBlock(ASTBlock::BLK_WITH);
+                withblock->setEnd(pos+operand);
                 blocks.push(withblock);
                 curblock = blocks.top();
+            }
+            break;
+        case Pyc::BEFORE_ASYNC_WITH:
+            {
+                PycRef<ASTBlock> withblock = new ASTWithBlock(ASTBlock::BLK_ASYNC_WITH);
+                blocks.push(withblock);
+                curblock = blocks.top();
+            }
+            break;
+        case Pyc::SETUP_ASYNC_WITH_A:
+            {
+                if (curblock->blktype() != ASTBlock::BLK_ASYNC_WITH) {
+                    fprintf(stderr, "Something TERRIBLE happened! no matching BEFORE_ASYNC_WITH found for SETUP_ASYNC_WITH_A at %d\n", curpos);
+                    break;
+                }
+
+                curblock.cast<ASTWithBlock>()->setEnd(pos+operand);
             }
             break;
         case Pyc::WITH_CLEANUP:
@@ -1931,8 +1951,9 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                     break;
                 }
 
-                if (curblock->blktype() == ASTBlock::BLK_WITH
-                        && curblock->end() == curpos) {
+                if (curblock->end() == curpos
+                    && (curblock->blktype() == ASTBlock::BLK_WITH
+                        || curblock->blktype() == ASTBlock::BLK_ASYNC_WITH)) {
                     PycRef<ASTBlock> with = curblock;
                     blocks.pop();
                     curblock = blocks.top();
@@ -2148,8 +2169,9 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                     if (curblock->blktype() == ASTBlock::BLK_FOR
                             && !curblock->inited()) {
                         curblock.cast<ASTIterBlock>()->setIndex(name);
-                    } else if (curblock->blktype() == ASTBlock::BLK_WITH
-                                   && !curblock->inited()) {
+                    } else if (!curblock->inited()
+                                && (curblock->blktype() == ASTBlock::BLK_WITH
+                                    || curblock->blktype() == ASTBlock::BLK_ASYNC_WITH)) {
                         curblock.cast<ASTWithBlock>()->setExpr(value);
                         curblock.cast<ASTWithBlock>()->setVar(name);
                     } else if (value.type() == ASTNode::NODE_CHAINSTORE) {
@@ -2255,8 +2277,9 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                         PycRef<ASTImport> import = stack.top().cast<ASTImport>();
 
                         import->add_store(new ASTStore(value, name));
-                    } else if (curblock->blktype() == ASTBlock::BLK_WITH
-                               && !curblock->inited()) {
+                    } else if (!curblock->inited()
+                               && (curblock->blktype() == ASTBlock::BLK_WITH
+                                   || curblock->blktype() == ASTBlock::BLK_ASYNC_WITH)) {
                         curblock.cast<ASTWithBlock>()->setExpr(value);
                         curblock.cast<ASTWithBlock>()->setVar(name);
                     } else if (value.type() == ASTNode::NODE_CHAINSTORE) {
@@ -2955,6 +2978,24 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
                     pyc_output << " as ";
                     print_src(var, mod, pyc_output);
                 }
+            } else if (blk->blktype() == ASTBlock::BLK_ASYNC_WITH) {
+                pyc_output << " ";
+                PycRef<ASTNode> expr = blk.cast<ASTWithBlock>()->expr();
+                if (expr->type() != ASTNode::NODE_RETURN) {
+                    fprintf(stderr, "type of async with expr is not NODE_RETURN\n");
+                    break;
+                }
+                PycRef<ASTReturn> ret = expr.cast<ASTReturn>();
+                if (ret->rettype() != ASTReturn::YIELD_FROM) {
+                    fprintf(stderr, "rettype of async with expr is not YIELD_FROM\n");
+                    break;
+                }
+                print_src(ret->value(), mod, pyc_output);
+                PycRef<ASTNode> var = blk.try_cast<ASTWithBlock>()->var();
+                if (var != NULL) {
+                    pyc_output << " as ";
+                    print_src(var, mod, pyc_output);
+                }
             }
             pyc_output << ":\n";
 
@@ -3023,7 +3064,6 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
                 case ASTReturn::YIELD_FROM:
                     if (value.type() == ASTNode::NODE_AWAITABLE) {
                         pyc_output << "(await ";
-                        value = value.cast<ASTAwaitable>()->expression();
                     } else {
                         pyc_output << "(yield from ";
                     }
@@ -3362,12 +3402,8 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
         }
         break;
     case ASTNode::NODE_AWAITABLE:
-        break;
         {
-            PycRef<ASTAwaitable> awaitable = node.cast<ASTAwaitable>();
-            pyc_output << "awaitable(";
-            print_src(awaitable->expression(), mod, pyc_output);
-            pyc_output << ")";
+            print_src(node.cast<ASTAwaitable>()->expression(), mod, pyc_output);
         }
         break;
     default:
