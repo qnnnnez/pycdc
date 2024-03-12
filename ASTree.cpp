@@ -607,6 +607,30 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                 stack.push(call);
             }
             break;
+        case Pyc::CALL_FUNCTION_EX_A:
+            {
+                PycRef<ASTNode> kw;
+                if (operand & 0x1) {
+                    kw = stack.top();
+                    stack.pop();
+                }
+                PycRef<ASTNode> var = stack.top();
+                stack.pop();
+                PycRef<ASTNode> func = stack.top();
+                stack.pop();
+
+                ASTCall::kwparam_t kwparamList;    // empty
+                ASTCall::pparam_t pparamList;      // empty
+                PycRef<ASTNode> call = new ASTCall(func, pparamList, kwparamList);
+                
+                if (operand & 0x1) {
+                    call.cast<ASTCall>()->setKW(kw);
+                }
+                call.cast<ASTCall>()->setVar(var);
+
+                stack.push(call);
+            }
+            break;
         case Pyc::CALL_METHOD_A:
             {
                 ASTCall::pparam_t pparamList;
@@ -800,6 +824,11 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                     stack.push(second.top());
                     second.pop();
                 }
+            }
+            break;
+        case Pyc::BEGIN_FINALLY:
+            {
+                stack.push(NULL);
             }
             break;
         case Pyc::END_FINALLY:
@@ -2427,11 +2456,10 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
             {
                 PycRef<ASTNode> dest = stack.top();
                 stack.pop();
-                // TODO: Support yielding into a non-null destination
                 PycRef<ASTNode> value = stack.top();
                 if (value) {
                     value->setProcessed();
-                    curblock->append(new ASTReturn(value, ASTReturn::YIELD_FROM));
+                    stack.push(new ASTReturn(value, ASTReturn::YIELD_FROM));
                 }
             }
             break;
@@ -2440,7 +2468,7 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
             {
                 PycRef<ASTNode> value = stack.top();
                 stack.pop();
-                curblock->append(new ASTReturn(value, ASTReturn::YIELD));
+                stack.push(new ASTReturn(value, ASTReturn::YIELD));
             }
             break;
         case Pyc::SETUP_ANNOTATIONS:
@@ -2989,19 +3017,32 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
                     pyc_output << "return ";
                     break;
                 case ASTReturn::YIELD:
-                    pyc_output << "yield ";
+                    // TODO: remove unnecessary parentheses around yield/await/yield from
+                    pyc_output << "(yield ";
                     break;
                 case ASTReturn::YIELD_FROM:
                     if (value.type() == ASTNode::NODE_AWAITABLE) {
-                        pyc_output << "await ";
+                        pyc_output << "(await ";
                         value = value.cast<ASTAwaitable>()->expression();
                     } else {
-                        pyc_output << "yield from ";
+                        pyc_output << "(yield from ";
                     }
                     break;
                 }
             }
+
             print_src(value, mod, pyc_output);
+
+            if (!inLambda) {
+                switch(ret->rettype()) {
+                    case ASTReturn::YIELD:
+                    case ASTReturn::YIELD_FROM:
+                        pyc_output << ")";
+                        break;
+                    default:
+                        break;
+                }
+            }
         }
         break;
     case ASTNode::NODE_SLICE:
@@ -3318,6 +3359,15 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
             pyc_output << " else ";
             print_src(ternary->else_expr(), mod, pyc_output);
             //pyc_output << ")";
+        }
+        break;
+    case ASTNode::NODE_AWAITABLE:
+        break;
+        {
+            PycRef<ASTAwaitable> awaitable = node.cast<ASTAwaitable>();
+            pyc_output << "awaitable(";
+            print_src(awaitable->expression(), mod, pyc_output);
+            pyc_output << ")";
         }
         break;
     default:
