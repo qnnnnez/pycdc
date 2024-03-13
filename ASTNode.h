@@ -608,21 +608,13 @@ private:
     int m_start;
 };
 
-class ASTContainerBlock : public ASTBlock {
+class ASTTryBlock : public ASTBlock {
 public:
-    ASTContainerBlock(int finally, int except = 0)
-        : ASTBlock(ASTBlock::BLK_CONTAINER, 0), m_finally(finally), m_except(except) { }
-
-    bool hasFinally() const { return m_finally != 0; }
-    bool hasExcept() const { return m_except != 0; }
+    ASTTryBlock(int finally)
+        : ASTBlock(ASTBlock::BLK_CONTAINER, 0), m_finally(finally) { }
     int finally() const { return m_finally; }
-    int except() const { return m_except; }
-
-    void setExcept(int except) { m_except = except; }
-
 private:
     int m_finally;
-    int m_except;
 };
 
 class ASTWithBlock : public ASTBlock {

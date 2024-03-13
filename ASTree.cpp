@@ -829,6 +829,7 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
         case Pyc::BEGIN_FINALLY:
             {
                 stack.push(NULL);
+                
             }
             break;
         case Pyc::END_FINALLY:
@@ -1827,8 +1828,6 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                     blocks.pop();
                     curblock = blocks.top();
                     curblock->append(prev.cast<ASTNode>());
-
-                    bc_next(source, mod, opcode, operand, pos);
                 }
             }
             break;
@@ -1850,8 +1849,6 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                     blocks.pop();
                     curblock = blocks.top();
                     curblock->append(prev.cast<ASTNode>());
-
-                    bc_next(source, mod, opcode, operand, pos);
                 }
             }
             break;
@@ -1967,32 +1964,43 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
         case Pyc::WITH_CLEANUP_FINISH:
             /* Ignore this */
             break;
+        
+        // case Pyc::SETUP_EXCEPT_A:
+        //     {
+        //         if (curblock->blktype() == ASTBlock::BLK_CONTAINER) {
+        //             curblock.cast<ASTContainerBlock>()->setExcept(pos+operand);
+        //         } else {
+        //             PycRef<ASTBlock> next = new ASTContainerBlock(0, pos+operand);
+        //             blocks.push(next.cast<ASTBlock>());
+        //         }
+
+        //         /* Store the current stack for the except/finally statement(s) */
+        //         stack_hist.push(stack);
+        //         PycRef<ASTBlock> tryblock = new ASTBlock(ASTBlock::BLK_TRY, pos+operand, true);
+        //         blocks.push(tryblock.cast<ASTBlock>());
+        //         curblock = blocks.top();
+        //     }
+        //     break;
+        // case Pyc::SETUP_FINALLY_A:
+        //     {
+        //         PycRef<ASTBlock> next = new ASTContainerBlock(pos+operand);
+        //         blocks.push(next.cast<ASTBlock>());
+        //         curblock = blocks.top();
+        //     }
+        //     break;
+
         case Pyc::SETUP_EXCEPT_A:
-            {
-                if (curblock->blktype() == ASTBlock::BLK_CONTAINER) {
-                    curblock.cast<ASTContainerBlock>()->setExcept(pos+operand);
-                } else {
-                    PycRef<ASTBlock> next = new ASTContainerBlock(0, pos+operand);
-                    blocks.push(next.cast<ASTBlock>());
-                }
-
-                /* Store the current stack for the except/finally statement(s) */
-                stack_hist.push(stack);
-                PycRef<ASTBlock> tryblock = new ASTBlock(ASTBlock::BLK_TRY, pos+operand, true);
-                blocks.push(tryblock.cast<ASTBlock>());
-                curblock = blocks.top();
-
-                need_try = false;
-            }
-            break;
         case Pyc::SETUP_FINALLY_A:
-            {
-                PycRef<ASTBlock> next = new ASTContainerBlock(pos+operand);
-                blocks.push(next.cast<ASTBlock>());
-                curblock = blocks.top();
+        {
+            stack_hist.push(stack);
+            PycRef<ASTBlock> tryblock = new ASTTryBlock(pos+operand);
 
-                need_try = true;
-            }
+        }
+        break;
+
+        case Pyc::CALL_FINALLY_A:
+            /* CALL_FINALLY is used to execute finally once when there is a
+               continue/break/return in a try/except/finally block */
             break;
         case Pyc::SETUP_LOOP_A:
             {
